@@ -213,11 +213,16 @@ def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_cha
         if not scasa_path:
             print("[SCASA] Not found on PATH; trying 'python -m scasa'.")
 
+        # Run both directions explicitly and reduce each to the median of the first column (SC values)
         commands = []
         if scasa_path:
             commands.append([scasa_path, 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)])
-        commands.append([sys.executable, '-m', 'scasa', 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)])
+            commands.append([scasa_path, 'sc', '--pdb', pdb_file_path, '--complex_1', binder_chain, '--complex_2', target_chain, '--distance', str(distance)])
+        else:
+            commands.append([sys.executable, '-m', 'scasa', 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)])
+            commands.append([sys.executable, '-m', 'scasa', 'sc', '--pdb', pdb_file_path, '--complex_1', binder_chain, '--complex_2', target_chain, '--distance', str(distance)])
 
+        sc_medians: list[float] = []
         for cmd in commands:
             try:
                 result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -228,51 +233,36 @@ def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_cha
                     continue
                 out = result.stdout.strip()
                 lines = [ln for ln in out.splitlines() if ln.strip()]
-
-                # Reduce per-point triplets into a single Sc by median(S_ab) and median(S_ba), then average
-                s_ab = []
-                s_ba = []
+                sc_values = []
                 for ln in lines:
                     parts = ln.split()
-                    if len(parts) >= 2:
+                    if len(parts) >= 1:
                         try:
-                            a = float(parts[0])
-                            b = float(parts[1])
-                            if -1.0 <= a <= 1.0 and -1.0 <= b <= 1.0:
-                                s_ab.append(a)
-                                s_ba.append(b)
+                            v = float(parts[0])
+                            sc_values.append(v)
                         except Exception:
                             continue
-
-                if s_ab and s_ba:
-                    median_ab = statistics.median(s_ab)
-                    median_ba = statistics.median(s_ba)
-                    avg_median = (median_ab + median_ba) / 2.0
-
-                    # Transform from [-1, 1] dot product space to [0, 1] Sc space
-                    # where -1 (perfect anti-parallel fit) -> 1 and +1 (clash) -> 0
-                    final_sc = (1.0 - avg_median) / 2.0
-
-                    # Optional diagnostics
-                    print(f"[SCASA-DIAG] PDB: {os.path.basename(pdb_file_path)}, points: {len(s_ab)}, med(A->B): {median_ab:.3f}, med(B->A): {median_ba:.3f}, avg_med: {avg_median:.3f}, Sc: {final_sc:.3f}")
-
-                    # Clamp to ensure value is strictly in [0, 1] before returning
-                    final_sc = max(0.0, min(final_sc, 1.0))
-                    return round(final_sc, 3)
-
-                # Fallback: try to parse a single float 0..1 from the output (if SCASA changes format)
-                m = re.search(r'(?<![\\d.])(0?\\.\\d+|1(?:\\.0+)?)', out)
-                if m:
-                    val = float(m.group(1))
-                    if 0.0 <= val <= 1.0:
-                        return round(val, 3)
-
-                print(f"[SCASA] Could not reduce output to Sc (rows={len(lines)}). Showing first 5 lines:")
-                for ln in lines[:5]:
-                    print(ln)
+                if sc_values:
+                    sc_medians.append(statistics.median(sc_values))
+                else:
+                    print("[SCASA] No numeric SC values parsed from first column; showing first 5 lines:")
+                    for ln in lines[:5]:
+                        print(ln)
             except Exception as e:
                 print(f"[SCASA] Exception running {' '.join(cmd)}: {e}")
                 continue
+
+        if len(sc_medians) == 2:
+            avg_raw = (sc_medians[0] + sc_medians[1]) / 2.0
+            mapped_sc = (avg_raw + 1.0) / 2.0  # map [-1,1] -> [0,1]
+            mapped_sc = max(0.0, min(mapped_sc, 1.0))
+            print(f"[SCASA-DIAG] PDB: {os.path.basename(pdb_file_path)}, med1: {sc_medians[0]:.3f}, med2: {sc_medians[1]:.3f}, avg_raw: {avg_raw:.3f}, Sc: {mapped_sc:.3f}")
+            return round(mapped_sc, 3)
+        elif len(sc_medians) == 1:
+            mapped_sc = (sc_medians[0] + 1.0) / 2.0
+            mapped_sc = max(0.0, min(mapped_sc, 1.0))
+            print(f"[SCASA] Only one direction parsed; med={sc_medians[0]:.3f} -> Sc={mapped_sc:.3f}")
+            return round(mapped_sc, 3)
     except Exception as e:
         print(f"[SCASA] ERROR: {e}")
     return 0.70
