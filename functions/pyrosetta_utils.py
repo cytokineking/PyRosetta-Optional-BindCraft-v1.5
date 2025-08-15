@@ -31,9 +31,9 @@ def score_interface(pdb_file, binder_chain="B", use_pyrosetta=True):
     Dispatches to appropriate implementation based on availability.
     """
     try:
-        # Handle PyRosetta-free mode
-        if not use_pyrosetta or not PYROSETTA_AVAILABLE:
-            return alt.biopython_score_interface(pdb_file, binder_chain)
+    # Handle PyRosetta-free mode
+    if not use_pyrosetta or not PYROSETTA_AVAILABLE:
+            return alt.pr_alternative_score_interface(pdb_file, binder_chain)
     except ImportError as e:
         if "pr_alternative_utils" in str(e):
             raise ImportError("Failed to import alternative implementations module") from e

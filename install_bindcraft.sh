@@ -121,6 +121,7 @@ python -c "import colabdesign" >/dev/null 2>&1 || { echo -e "Error: colabdesign 
 
 # install SCASA for shape complementarity calculations
 echo -e "Installing SCASA for shape complementarity calculations\n"
+pip3 install plotly scikit-learn || { echo -e "Error: Failed to install SCASA dependencies"; exit 1; }
 pip3 install git+https://github.com/t-whalley/SCASA.git || { echo -e "Error: Failed to install SCASA"; exit 1; }
 python -c "import scasa" >/dev/null 2>&1 || { echo -e "Error: scasa module not found after installation"; exit 1; }
 
