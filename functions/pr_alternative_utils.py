@@ -27,6 +27,7 @@ import subprocess
 import sys
 import re
 import statistics
+import os
 from itertools import zip_longest
 from .generic_utils import clean_pdb
 from .biopython_utils import hotspot_residues, biopython_align_all_ca
@@ -244,13 +245,23 @@ def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_cha
                             continue
 
                 if s_ab and s_ba:
-                    sc_val = (statistics.median(s_ab) + statistics.median(s_ba)) / 2.0
-                    # Sc should be 0..1; if negatives appear due to convention, clamp into [0,1]
-                    sc_val = max(0.0, min(sc_val, 1.0))
-                    return round(sc_val, 3)
+                    median_ab = statistics.median(s_ab)
+                    median_ba = statistics.median(s_ba)
+                    avg_median = (median_ab + median_ba) / 2.0
+
+                    # Transform from [-1, 1] dot product space to [0, 1] Sc space
+                    # where -1 (perfect anti-parallel fit) -> 1 and +1 (clash) -> 0
+                    final_sc = (1.0 - avg_median) / 2.0
+
+                    # Optional diagnostics
+                    print(f"[SCASA-DIAG] PDB: {os.path.basename(pdb_file_path)}, points: {len(s_ab)}, med(A->B): {median_ab:.3f}, med(B->A): {median_ba:.3f}, avg_med: {avg_median:.3f}, Sc: {final_sc:.3f}")
+
+                    # Clamp to ensure value is strictly in [0, 1] before returning
+                    final_sc = max(0.0, min(final_sc, 1.0))
+                    return round(final_sc, 3)
 
                 # Fallback: try to parse a single float 0..1 from the output (if SCASA changes format)
-                m = re.search(r'(?<![\d.])(0?\.\d+|1(?:\.0+)?)', out)
+                m = re.search(r'(?<![\\d.])(0?\\.\\d+|1(?:\\.0+)?)', out)
                 if m:
                     val = float(m.group(1))
                     if 0.0 <= val <= 1.0:
