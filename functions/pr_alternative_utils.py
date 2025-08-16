@@ -23,10 +23,6 @@ Helper Functions:
 import gc
 import shutil
 import copy
-import subprocess
-import sys
-import re
-import statistics
 import os
 import numpy as np
 from itertools import zip_longest
@@ -191,7 +187,7 @@ def _chain_hydrophobic_sasa(chain_entity):
 
 def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_chain="A", distance=4.0):
     """
-    Calculate shape complementarity using SCASA.
+    Calculate shape complementarity using SCASA module API.
     
     Parameters
     ----------
@@ -209,7 +205,6 @@ def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_cha
     float
         Shape complementarity value (0.0 to 1.0), or 0.70 as fallback
     """
-    # 1) Prefer module API
     try:
         from scasa.scasa import Complex as ScasaComplex
         comp = ScasaComplex(pdb_file_path, complex_1=target_chain, complex_2=binder_chain,
@@ -228,51 +223,10 @@ def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_cha
         sc1 = comp.calculate_sc(pts1, pts2, comp.weight)
         sc2 = comp.calculate_sc(pts2, pts1, comp.weight)
         sc = (float(np.median(sc1)) + float(np.median(sc2))) / 2.0
-        print(f"[SCASA-DIAG] (module) PDB: {os.path.basename(pdb_file_path)}, med1: {np.median(sc1):.3f}, med2: {np.median(sc2):.3f}, Sc: {sc:.3f}")
+        print(f"[SCASA-DIAG] PDB: {os.path.basename(pdb_file_path)}, med1: {np.median(sc1):.3f}, med2: {np.median(sc2):.3f}, Sc: {sc:.3f}")
         return round(sc, 3)
     except Exception as e_mod:
-        print(f"[SCASA] Module call failed: {e_mod}; falling back to CLI.")
-
-    # 2) Fallback to CLI once
-    try:
-        scasa_path = shutil.which('SCASA') or shutil.which('scasa')
-        if not scasa_path:
-            print("[SCASA] Not found on PATH; trying 'python -m scasa'.")
-        if scasa_path:
-            cmd = [scasa_path, 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)]
-        else:
-            cmd = [sys.executable, '-m', 'scasa', 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode != 0:
-            print(f"[SCASA] Command failed (rc={result.returncode}): {' '.join(cmd)}")
-            if result.stderr:
-                print(f"[SCASA] STDERR: {result.stderr.strip()[:500]}")
-            return 0.70
-        out = result.stdout.strip()
-        lines = [ln for ln in out.splitlines() if ln.strip()]
-        s_ab = []
-        s_ba = []
-        for ln in lines:
-            parts = ln.split()
-            if len(parts) >= 2:
-                try:
-                    s_ab.append(float(parts[0]))
-                    s_ba.append(float(parts[1]))
-                except Exception:
-                    continue
-        if s_ab and s_ba:
-            med1 = statistics.median(s_ab)
-            med2 = statistics.median(s_ba)
-            sc = (med1 + med2) / 2.0
-            print(f"[SCASA-DIAG] (cli) PDB: {os.path.basename(pdb_file_path)}, med1: {med1:.3f}, med2: {med2:.3f}, Sc: {sc:.3f}")
-            return round(sc, 3)
-        else:
-            print("[SCASA] Could not parse two columns of SC values; showing first 5 lines:")
-            for ln in lines[:5]:
-                print(ln)
-            return 0.70
-    except Exception as e_cli:
-        print(f"[SCASA] CLI fallback failed: {e_cli}")
+        print(f"[SCASA] Module call failed: {e_mod}; using fallback value 0.70")
         return 0.70
 
 def _compute_sasa_metrics(pdb_file_path, binder_chain="B", target_chain="A"):
