@@ -28,6 +28,7 @@ import sys
 import re
 import statistics
 import os
+import numpy as np
 from itertools import zip_longest
 from .generic_utils import clean_pdb
 from .biopython_utils import hotspot_residues, biopython_align_all_ca
@@ -208,64 +209,71 @@ def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_cha
     float
         Shape complementarity value (0.0 to 1.0), or 0.70 as fallback
     """
+    # 1) Prefer module API
+    try:
+        from scasa.scasa import Complex as ScasaComplex
+        comp = ScasaComplex(pdb_file_path, complex_1=target_chain, complex_2=binder_chain,
+                            distance=float(distance), density=1.5, weight=0.5, verbose=False)
+        c1, c2 = comp.create_interface()
+        c1 = comp.filter_interface(c1, c2, comp.distance)
+        c2 = comp.filter_interface(c2, c1, comp.distance)
+        area_1 = comp.estimate_surface_area(c1.coords)
+        area_2 = comp.estimate_surface_area(c2.coords)
+        simp1 = comp.create_polygon(c1.coords)
+        simp2 = comp.create_polygon(c2.coords)
+        n1 = max(1, round(comp.density * area_1))
+        n2 = max(1, round(comp.density * area_2))
+        pts1 = comp.random_points(c1.coords, simp1, n1)
+        pts2 = comp.random_points(c2.coords, simp2, n2)
+        sc1 = comp.calculate_sc(pts1, pts2, comp.weight)
+        sc2 = comp.calculate_sc(pts2, pts1, comp.weight)
+        sc = (float(np.median(sc1)) + float(np.median(sc2))) / 2.0
+        print(f"[SCASA-DIAG] (module) PDB: {os.path.basename(pdb_file_path)}, med1: {np.median(sc1):.3f}, med2: {np.median(sc2):.3f}, Sc: {sc:.3f}")
+        return round(sc, 3)
+    except Exception as e_mod:
+        print(f"[SCASA] Module call failed: {e_mod}; falling back to CLI.")
+
+    # 2) Fallback to CLI once
     try:
         scasa_path = shutil.which('SCASA') or shutil.which('scasa')
         if not scasa_path:
             print("[SCASA] Not found on PATH; trying 'python -m scasa'.")
-
-        # Run both directions explicitly and reduce each to the median of the first column (SC values)
-        commands = []
         if scasa_path:
-            commands.append([scasa_path, 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)])
-            commands.append([scasa_path, 'sc', '--pdb', pdb_file_path, '--complex_1', binder_chain, '--complex_2', target_chain, '--distance', str(distance)])
+            cmd = [scasa_path, 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)]
         else:
-            commands.append([sys.executable, '-m', 'scasa', 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)])
-            commands.append([sys.executable, '-m', 'scasa', 'sc', '--pdb', pdb_file_path, '--complex_1', binder_chain, '--complex_2', target_chain, '--distance', str(distance)])
-
-        sc_medians: list[float] = []
-        for cmd in commands:
-            try:
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                if result.returncode != 0:
-                    print(f"[SCASA] Command failed (rc={result.returncode}): {' '.join(cmd)}")
-                    if result.stderr:
-                        print(f"[SCASA] STDERR: {result.stderr.strip()[:500]}")
+            cmd = [sys.executable, '-m', 'scasa', 'sc', '--pdb', pdb_file_path, '--complex_1', target_chain, '--complex_2', binder_chain, '--distance', str(distance)]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            print(f"[SCASA] Command failed (rc={result.returncode}): {' '.join(cmd)}")
+            if result.stderr:
+                print(f"[SCASA] STDERR: {result.stderr.strip()[:500]}")
+            return 0.70
+        out = result.stdout.strip()
+        lines = [ln for ln in out.splitlines() if ln.strip()]
+        s_ab = []
+        s_ba = []
+        for ln in lines:
+            parts = ln.split()
+            if len(parts) >= 2:
+                try:
+                    s_ab.append(float(parts[0]))
+                    s_ba.append(float(parts[1]))
+                except Exception:
                     continue
-                out = result.stdout.strip()
-                lines = [ln for ln in out.splitlines() if ln.strip()]
-                sc_values = []
-                for ln in lines:
-                    parts = ln.split()
-                    if len(parts) >= 1:
-                        try:
-                            v = float(parts[0])
-                            sc_values.append(v)
-                        except Exception:
-                            continue
-                if sc_values:
-                    sc_medians.append(statistics.median(sc_values))
-                else:
-                    print("[SCASA] No numeric SC values parsed from first column; showing first 5 lines:")
-                    for ln in lines[:5]:
-                        print(ln)
-            except Exception as e:
-                print(f"[SCASA] Exception running {' '.join(cmd)}: {e}")
-                continue
-
-        if len(sc_medians) == 2:
-            avg_raw = (sc_medians[0] + sc_medians[1]) / 2.0
-            mapped_sc = (avg_raw + 1.0) / 2.0  # map [-1,1] -> [0,1]
-            mapped_sc = max(0.0, min(mapped_sc, 1.0))
-            print(f"[SCASA-DIAG] PDB: {os.path.basename(pdb_file_path)}, med1: {sc_medians[0]:.3f}, med2: {sc_medians[1]:.3f}, avg_raw: {avg_raw:.3f}, Sc: {mapped_sc:.3f}")
-            return round(mapped_sc, 3)
-        elif len(sc_medians) == 1:
-            mapped_sc = (sc_medians[0] + 1.0) / 2.0
-            mapped_sc = max(0.0, min(mapped_sc, 1.0))
-            print(f"[SCASA] Only one direction parsed; med={sc_medians[0]:.3f} -> Sc={mapped_sc:.3f}")
-            return round(mapped_sc, 3)
-    except Exception as e:
-        print(f"[SCASA] ERROR: {e}")
-    return 0.70
+        if s_ab and s_ba:
+            med1 = statistics.median(s_ab)
+            med2 = statistics.median(s_ba)
+            sc = (med1 + med2) / 2.0
+            print(f"[SCASA-DIAG] (cli) PDB: {os.path.basename(pdb_file_path)}, med1: {med1:.3f}, med2: {med2:.3f}, Sc: {sc:.3f}")
+            return round(sc, 3)
+        else:
+            print("[SCASA] Could not parse two columns of SC values; showing first 5 lines:")
+            for ln in lines[:5]:
+                print(ln)
+            return 0.70
+    except Exception as e_cli:
+        print(f"[SCASA] CLI fallback failed: {e_cli}")
+        return 0.70
 
 def _compute_sasa_metrics(pdb_file_path, binder_chain="B", target_chain="A"):
     """
