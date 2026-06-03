@@ -807,7 +807,7 @@ def _add_hydrogens_and_minimize(pdb_in_path, pdb_out_path, platform_order=None,
         props = {}
         sim = None
         if platform_order is None:
-            platform_order = ['OpenCL', 'CUDA', 'CPU']
+            platform_order = ['Metal', 'OpenCL', 'CPU']
         for p_name in platform_order:
             try:
                 platform_obj = Platform.getPlatformByName(p_name)

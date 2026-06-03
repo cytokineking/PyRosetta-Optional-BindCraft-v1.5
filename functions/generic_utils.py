@@ -211,7 +211,7 @@ def load_helicity(advanced_settings):
 def check_jax_gpu():
     devices = jax.devices()
 
-    has_gpu = any(device.platform == 'gpu' for device in devices)
+    has_gpu = any(device.platform.lower() in ('gpu', 'metal') for device in devices)
 
     if not has_gpu:
         print("No GPU device found, terminating.")
